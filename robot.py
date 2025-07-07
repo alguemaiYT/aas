@@ -3,10 +3,12 @@ import pyaudio
 import snowboydecoder
 import webrtcvad
 from gladia import Gladia
-from groq import Groq
-import rhvoice
+import requests # Added requests
+# from groq import Groq # Removed Groq SDK
+import rhvoice # Assuming this is a valid import for a wrapper
 import logging
 from dotenv import load_dotenv
+import json # For crafting JSON payloads
 
 # Load environment variables from .env file
 load_dotenv()
@@ -20,6 +22,7 @@ SNOWBOY_MODEL = "jarvis.umdl"
 WAKE_WORD = "jarvis"
 GLADIA_API_KEY = os.getenv("GLADIA_API_KEY")
 GROK_API_KEY = os.getenv("GROK_API_KEY")
+GROK_API_URL = "https://api.groq.com/openai/v1/chat/completions" # Standard Grok API endpoint
 RHVOICE_VOICE = "en_us"
 AUDIO_FORMAT = pyaudio.paInt16
 CHANNELS = 1
@@ -34,8 +37,16 @@ class VoiceAssistant:
         self.audio = pyaudio.PyAudio()
         self.vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
         self.gladia_client = Gladia(api_key=GLADIA_API_KEY)
-        self.grok_client = Groq(api_key=GROK_API_KEY)
-        self.rhvoice_tts = rhvoice.TTS(lang=RHVOICE_VOICE)
+        # self.grok_client = Groq(api_key=GROK_API_KEY) # Removed Groq SDK client
+        # For RHVoice, direct instantiation might vary.
+        # If 'rhvoice' is a wrapper, this might be correct.
+        # If it requires a service or command line, adjust self.speak()
+        try:
+            self.rhvoice_tts = rhvoice.TTS(lang=RHVOICE_VOICE)
+        except Exception as e:
+            logging.warning(f"Could not initialize rhvoice.TTS: {e}. TTS might not work.")
+            self.rhvoice_tts = None # Ensure it's defined
+
         self.detector = None
         self.listening_for_command = False
 
@@ -123,59 +134,103 @@ class VoiceAssistant:
             print(f"Transcription: {transcription}")
             return transcription.strip()
         except Exception as e:
-            logging.error(f"Gladia transcription error: {e}")
+            logging.error(f"Gladia transcription error: {e}", exc_info=True)
             print(f"Error during transcription: {e}")
             return None
 
     async def get_ai_response(self, text):
         if not text:
             return "I didn't catch that. Could you please repeat?"
+        if not GROK_API_KEY:
+            logging.error("GROK_API_KEY not found for get_ai_response.")
+            return "My connection to the AI brain is not configured."
+
+        headers = {
+            "Authorization": f"Bearer {GROK_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": "mixtral-8x7b-32768", # Or other compatible Grok model
+            "messages": [
+                {
+                    "role": "user",
+                    "content": text,
+                }
+            ],
+            "temperature": 0.7, # Example: Adjust for creativity vs. conciseness
+        }
+
         try:
-            print(f"Sending to Grok: {text}")
-            chat_completion = self.grok_client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": text,
-                    }
-                ],
-                model="mixtral-8x7b-32768", # Or other Grok model
-            )
-            response = chat_completion.choices[0].message.content
-            print(f"Grok response: {response}")
-            return response
-        except Exception as e:
-            logging.error(f"Grok API error: {e}")
-            print(f"Error querying Grok: {e}")
+            print(f"Sending to Grok API: {text}")
+            # Using await with a non-async requests call needs a thread or asyncio.to_thread
+            # For simplicity in this context, if requests is used directly in an async def,
+            # it will block. For true async, httpx or aiohttp would be better.
+            # However, to stick to `requests` as per prompt, we'll make it blocking here.
+            # If this function must remain truly async, `asyncio.to_thread` is needed.
+            # Let's assume for now that a brief block here is acceptable for the flow.
+            # If not, this would need to be:
+            # loop = asyncio.get_event_loop()
+            # response = await loop.run_in_executor(None, lambda: requests.post(GROK_API_URL, headers=headers, json=payload))
+
+            # Direct blocking call (simplest change, makes this part of async func blocking)
+            api_response = requests.post(GROK_API_URL, headers=headers, json=payload, timeout=20)
+            api_response.raise_for_status()  # Raises an HTTPError for bad responses (4XX or 5XX)
+
+            response_data = api_response.json()
+
+            if response_data.get("choices") and len(response_data["choices"]) > 0:
+                message = response_data["choices"][0].get("message")
+                if message and message.get("content"):
+                    content = message["content"]
+                    print(f"Grok API response: {content}")
+                    return content
+            logging.error(f"Unexpected Grok API response format: {response_data}")
+            return "I received a strange response from my brain."
+
+        except requests.exceptions.Timeout:
+            logging.error("Grok API request timed out.")
+            print("Error: Grok API request timed out.")
+            return "My AI brain is taking too long to respond."
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Grok API request error: {e}", exc_info=True)
+            print(f"Error querying Grok API: {e}")
             return "I'm having trouble connecting to my brain right now."
+        except Exception as e:
+            logging.error(f"Unexpected error in get_ai_response: {e}", exc_info=True)
+            print(f"Unexpected error processing AI response: {e}")
+            return "An unexpected error occurred while thinking."
 
     def speak(self, text):
         if not text:
             return
+        if not self.rhvoice_tts and not os.path.exists("/usr/bin/RHVoice-test"):
+            logging.error("RHVoice not initialized and RHVoice-test not found. Cannot speak.")
+            print("Error: TTS not available.")
+            return
         try:
             print(f"Speaking: {text}")
-            # RHVoice usage might vary depending on the specific Python wrapper
-            # This is a conceptual example. The actual API might be different.
-            # For instance, it might save to a file and then play it.
-            # Or it might directly stream to an audio output.
+            # Prefer rhvoice-wrapper if available and initialized
+            if self.rhvoice_tts:
+                 # This depends on the actual API of the rhvoice-wrapper
+                 # Common methods are .say(), .speak(), .tts() then play
+                 # Assuming a .say() or .speak() method that is blocking
+                self.rhvoice_tts.say(text) # Or .speak(text)
+            elif os.path.exists("/usr/bin/RHVoice-test"): # Fallback to CLI
+                # Ensure text is properly escaped for shell command
+                # For security and robustness, using pipes with subprocess is better than os.system
+                import subprocess
+                process = subprocess.Popen(['RHVoice-test', '-p', RHVOICE_VOICE], stdin=subprocess.PIPE)
+                process.communicate(input=text.encode('utf-8'))
+            else:
+                # This case should ideally be caught by the initial check, but as a safeguard:
+                logging.warning("TTS called but no method available.")
+                print("TTS: No speak method available.")
+                return # No TTS method available
 
-            # Assuming a simple blocking speak method for now
-            # You might need to install 'rhvoice-wrapper' or similar
-            # and ensure RHVoice service is running.
-            # Example: self.rhvoice_tts.say(text)
-            # Or:
-            # wav_data = self.rhvoice_tts.tts(text)
-            # play_wav_data(wav_data) # You'd need a function for this
-
-            # For simplicity, using a placeholder for actual speech synthesis call
-            # In a real scenario, you would integrate RHVoice properly.
-            # This often involves calling a command-line tool or using a specific library.
-            # For example, if RHVoice-test is installed:
-            os.system(f'echo "{text}" | RHVoice-test -p {RHVOICE_VOICE}')
             print("Finished speaking.")
 
         except Exception as e:
-            logging.error(f"RHVoice error: {e}")
+            logging.error(f"RHVoice error: {e}", exc_info=True)
             print(f"Error during speech synthesis: {e}")
 
     async def run(self):

@@ -3,5 +3,6 @@ snowboydecoder
 webrtcvad
 gladia-python
 groq
+requests
 rhvoice-wrapper
 python-dotenv

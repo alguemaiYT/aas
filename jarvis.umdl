@@ -1,0 +1,7 @@
+# This is a placeholder for the Snowboy wake word model file (jarvis.umdl).
+# Replace this file with the actual model trained for the wake word "jarvis".
+# Snowboy model files are binary and specific to the wake word and platform.
+# You can train your own model at https://snowboy.kitt.ai/ (if service is available)
+# or find pre-trained models if they match your needs.
+This_file_is_a_placeholder_for_the_binary_UMDL_model.
+Please_replace_it_with_your_actual_Snowboy_model_file.

@@ -1,0 +1,7 @@
+pyaudio
+snowboydecoder
+webrtcvad
+gladia-python
+groq
+rhvoice-wrapper
+python-dotenv
